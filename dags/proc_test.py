@@ -5,8 +5,8 @@ from airflow.hooks.postgres_hook import PostgresHook
 from datetime import datetime, timedelta
 import pandas as pd
 import psycopg2
-#import statsmodels
-#from statsmodels.tsa.arima.model import ARIMA
+#from statsmodels.tsa.arima.model import ARIMA #, ARIMAResults
+
 
 ## From csv to data table
 def local_csv_to_data_base(filename, **context):
@@ -63,7 +63,7 @@ def retrieve_data(**context):
     # Retrieve data from the table
     connection = pg_hook.get_conn()
     cursor = connection.cursor()
-    cursor.execute("SELECT * FROM nydp_arrest_data limit 4000") #***************  CHANGE THISSSSSSS!!!!!!!!!!!!!!!!!!!!!!!!! ******************* (no limit)
+    cursor.execute("SELECT * FROM nydp_arrest_data limit 6000") #***************  CHANGE THISSSSSSS!!!!!!!!!!!!!!!!!!!!!!!!! ******************* (no limit)
     result = cursor.fetchall()
     # Push the data to XCom
     context['ti'].xcom_push(key='nydp_arrest_data_xcom', value=result)
@@ -141,7 +141,12 @@ def data_processing(**context):
     df_clean = clean_data(df)
     # Filter data, allowing only the values M, F and V in the dataframe
     df_filtered = filter_arrest_data_by_category(df_clean)
+    df_filtered_json = df_filtered.to_json()
+    context['ti'].xcom_push(key='df_filtered', value=df_filtered_json)
+    return "Data filtered created"
 
+def data_processing_bronx(**context):
+    df_filtered = context['ti'].xcom_pull(key='df_filtered')
     # data from bronx
     dataBronx_M_vis, dataBronx_F_vis, dataBronx_V_vis = data_bronx_by_type_of_crime(df_filtered)
     # Convert DataFrame to JSON string
@@ -152,7 +157,10 @@ def data_processing(**context):
     context['ti'].xcom_push(key='dataBronx_M_vis', value=dataBronx_M_vis_json)
     context['ti'].xcom_push(key='dataBronx_F_vis', value=dataBronx_F_vis_json)
     context['ti'].xcom_push(key='dataBronx_V_vis', value=dataBronx_V_vis_json)
+    return "bronx data is processed"
     
+def data_processing_manhatan(**context):
+    df_filtered = context['ti'].xcom_pull(key='df_filtered')
     # data from manhatan
     dataManhatan_M_vis, dataManhatan_F_vis, dataManhatan_V_vis = data_manhatan_by_type_of_crime(df_filtered)
     # Convert DataFrame to JSON string
@@ -163,105 +171,171 @@ def data_processing(**context):
     context['ti'].xcom_push(key='dataManhatan_M_vis', value=dataManhatan_M_vis_json)
     context['ti'].xcom_push(key='dataManhatan_F_vis', value=dataManhatan_F_vis_json)
     context['ti'].xcom_push(key='dataManhatan_V_vis', value=dataManhatan_V_vis_json)
-
+    return "manhatan data is processed"
 ##################################################################################
 ################## utils for model training  #####################################
 ##################################################################################
-# def generate_model_for_dataBronx_M_vis(ts_bronx):
-#     """
-#     Model: ARI
-#     Parameters:
-#         p = 1
-#         d = 1
-#         q = 0
-#     """
-#     p=1
-#     d=1
-#     q=0
-#     arima = ARIMA(ts_bronx, order = (p, d, q))
-#     model = arima.fit()
-#     return model
-
-# def generate_model_for_dataBronx_F_vis(ts_bronx):
-#     """
-#     Model: ARI
-#     Parameters:
-#         p = 1
-#         d = 1
-#         q = 0
-#     """
-#     p=1
-#     d=1
-#     q=0
-#     arima = ARIMA(ts_bronx, order = (p, d, q))
-#     model = arima.fit()
-#     return model
-
-# def generate_model_for_dataBronx_V_vis(ts_bronx):
-#     """
-#     Model: ARI
-#     Parameters:
-#         p = 1
-#         d = 1
-#         q = 0
-#     """
-#     p=1
-#     d=1
-#     q=0
-#     arima = ARIMA(ts_bronx, order = (p, d, q))
-#     model = arima.fit()
-#     return model
-
-# def generate_model_for_dataManhatan_M_vis(ts_manhatan):
-#     """
-#     Model: ARI
-#     Parameters:
-#         p = 1
-#         d = 1
-#         q = 0
-#     """
-#     p=1
-#     d=1
-#     q=0
-#     arima = ARIMA(ts_manhatan, order = (p, d, q))
-#     model = arima.fit()
-#     return model
-
-# def generate_model_for_dataManhatan_F_vis(ts_manhatan):
-#     """
-#     Model: ARI
-#     Parameters:
-#         p = 1
-#         d = 1
-#         q = 0
-#     """
-#     p=1
-#     d=1
-#     q=0
-#     arima = ARIMA(ts_manhatan, order = (p, d, q))
-#     model = arima.fit()
-#     return model
-
-# def generate_model_for_dataManhatan_V_vis(ts_manhatan ):
-#     """
-#     Model: ARI
-#     Parameters:
-#         p = 1
-#         d = 1
-#         q = 0
-#     """
-#     p=1
-#     d=1
-#     q=0
-#     arima = ARIMA(ts_manhatan, order = (p, d, q))
-#     model = arima.fit()
-#     return model
-
-def model_training(**context):
+def train_model_for_dataBronx_M_vis(**context):
     # Pull the data from XCom
     dataBronx_M = context['ti'].xcom_pull(key='dataBronx_M_vis')
-    print(dataBronx_M)
+    # Convert the data to a pandas DataFrame
+    ts_bronx_M = pd.read_json(dataBronx_M)
+    """
+    Model: ARI
+    Parameters:
+        p = 1
+        d = 1
+        q = 0
+    """
+    p=1
+    d=1
+    q=0
+    arima = ARIMA(ts_bronx_M, order = (p, d, q))
+    model_fit = arima.fit()
+    # Save model
+    model_path = 'model_bronx_M.pkl'
+    model_fit.save(model_path)
+    # Push model path using xcom_push()
+    context['ti'].xcom_push(key='model_bronx_M', value=model_path)
+    return "model_bronx_M.pkl created"
+
+def train_model_for_dataBronx_F_vis(**context):
+    # Pull the data from XCom
+    dataBronx_F = context['ti'].xcom_pull(key='dataBronx_F_vis')
+    # Convert the data to a pandas DataFrame
+    ts_bronx_F = pd.read_json(dataBronx_F)
+    """
+    Model: ARI
+    Parameters:
+        p = 1
+        d = 1
+        q = 0
+    """
+    p=1
+    d=1
+    q=0
+    arima = ARIMA(ts_bronx_F, order = (p, d, q))
+    model_fit = arima.fit()
+    # Save model
+    model_path = 'model_bronx_F.pkl'
+    model_fit.save(model_path)
+    # Push model path using xcom_push()
+    context['ti'].xcom_push(key='model_bronx_F', value=model_path)
+    return "model_bronx_F.pkl created"
+
+def train_model_for_dataBronx_V_vis(**context):
+    # Pull the data from XCom
+    dataBronx_V = context['ti'].xcom_pull(key='dataBronx_V_vis')
+    # Convert the data to a pandas DataFrame
+    ts_bronx_V = pd.read_json(dataBronx_V)
+    """
+    Model: ARI
+    Parameters:
+        p = 1
+        d = 1
+        q = 0
+    """
+    p=1
+    d=1
+    q=0
+    arima = ARIMA(ts_bronx_V, order = (p, d, q))
+    model_fit = arima.fit()
+    # Save model
+    model_path = 'model_bronx_V.pkl'
+    model_fit.save(model_path)
+    # Push model path using xcom_push()
+    context['ti'].xcom_push(key='model_bronx_V', value=model_path)
+    return "model_bronx_V.pkl created"
+
+def train_model_for_dataManhatan_M_vis(**context):
+    # Pull the data from XCom
+    dataManhatan_M = context['ti'].xcom_pull(key='dataManhatan_M_vis')
+    # Convert the data to a pandas DataFrame
+    ts_manhatan_M = pd.read_json(dataManhatan_M)
+    """
+    Model: ARI
+    Parameters:
+        p = 1
+        d = 1
+        q = 0
+    """
+    p=1
+    d=1
+    q=0
+    arima = ARIMA(ts_manhatan_M, order = (p, d, q))
+    model_fit = arima.fit()
+    # Save model
+    model_path = 'model_manhatan_M.pkl'
+    model_fit.save(model_path)
+    # Push model path using xcom_push()
+    context['ti'].xcom_push(key='model_manhatan_M', value=model_path)
+    return "model_manhatan_M.pkl created"
+
+def train_model_for_dataManhatan_F_vis(**context):
+    # Pull the data from XCom
+    dataManhatan_F = context['ti'].xcom_pull(key='dataManhatan_F_vis')
+    # Convert the data to a pandas DataFrame
+    ts_manhatan_F = pd.read_json(dataManhatan_F)
+    """
+    Model: ARI
+    Parameters:
+        p = 1
+        d = 1
+        q = 0
+    """
+    p=1
+    d=1
+    q=0
+    arima = ARIMA(ts_manhatan_F, order = (p, d, q))
+    model_fit = arima.fit()
+    # Save model
+    model_path = 'model_manhatan_F.pkl'
+    model_fit.save(model_path)
+    # Push model path using xcom_push()
+    context['ti'].xcom_push(key='model_manhatan_F', value=model_path)
+    return "model_manhatan_F.pkl created"
+
+def train_model_for_dataManhatan_V_vis(**context):
+    # Pull the data from XCom
+    dataManhatan_V = context['ti'].xcom_pull(key='dataManhatan_V_vis')
+    # Convert the data to a pandas DataFrame
+    ts_manhatan_V = pd.read_json(dataManhatan_V)
+    """
+    Model: ARI
+    Parameters:
+        p = 1
+        d = 1
+        q = 0
+    """
+    p=1
+    d=1
+    q=0
+    arima = ARIMA(ts_manhatan_V, order = (p, d, q))
+    model_fit = arima.fit()
+    # Save model
+    model_path = 'model_manhatan_V.pkl'
+    model_fit.save(model_path)
+    # Push model path using xcom_push()
+    context['ti'].xcom_push(key='model_manhatan_V', value=model_path)
+    return "model_manhatan_V.pkl created"
+
+def model_training(**context):
     return
+    
+
+##################################################################################
+################## utils for model inference  ####################################
+##################################################################################
+
+# def model_inference(models_name, **context):
+#     # monkey patch around bug in ARIMA class
+#     def __getnewargs__(self):
+#      return ((self.endog),(self.k_lags, self.k_diff, self.k_ma))
+#     ARIMA.__getnewargs__ = __getnewargs__
+#     # load model
+#     loaded = ARIMAResults.load('{models_name}.pkl')
+#     return
+
 
 #############################################
 #############################################
@@ -274,7 +348,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id='proc_test_v06',
+    dag_id='proc_test_v07',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
@@ -327,11 +401,55 @@ with DAG(
         provide_context = True
     )
 
-    task5_model_training = PythonOperator(
-        task_id = 'model_training_',
-        python_callable = model_training,
+    task4_1_data_processing_bronx = PythonOperator(
+        task_id = 'data_processing_bronx_',
+        python_callable = data_processing_bronx,
+        provide_context = True
+    )
+
+    task4_2_data_processing_manhatan = PythonOperator(
+        task_id = 'data_processing_manhatan_',
+        python_callable = data_processing_manhatan,
+        provide_context = True
+    )
+
+    task5_1_model_training_bronx_M = PythonOperator(
+        task_id = 'model_training_bronx_M',
+        python_callable = train_model_for_dataBronx_M_vis,
+        provide_context = True
+    )
+
+    task5_2_model_training_bronx_F = PythonOperator(
+        task_id = 'model_training_bronx_F',
+        python_callable = train_model_for_dataBronx_F_vis,
+        provide_context = True
+    )  
+
+    task5_3_model_training_bronx_V = PythonOperator(
+        task_id = 'model_training_bronx_V',
+        python_callable = train_model_for_dataBronx_V_vis,
         provide_context = True
     ) 
+
+    task6_1_model_training_manhatan_M = PythonOperator(
+        task_id = 'model_training_manhatan_M',
+        python_callable = train_model_for_dataManhatan_M_vis,
+        provide_context = True
+    )
+
+    task6_2_model_training_manhatan_F = PythonOperator(
+        task_id = 'model_training_manhatan_F',
+        python_callable = train_model_for_dataManhatan_F_vis,
+        provide_context = True
+    )
+    
+    task6_3_model_training_manhatan_V = PythonOperator(
+        task_id = 'model_training_manhatan_V',
+        python_callable = train_model_for_dataManhatan_V_vis,
+        provide_context = True
+    )
+
+   
 
     #############################################
     #############################################
@@ -339,4 +457,15 @@ with DAG(
     #############################################
     #############################################
     
-    task1_create_postgres_table>> task2_local_csv_to_data_base>> task3_data_extraction >> task4_data_processing >> task5_model_training
+    task1_create_postgres_table>> task2_local_csv_to_data_base>> task3_data_extraction >> task4_data_processing 
+    
+    task4_data_processing>> task4_1_data_processing_bronx
+    task4_data_processing>> task4_2_data_processing_manhatan
+
+    task4_1_data_processing_bronx>> task5_1_model_training_bronx_M
+    task4_1_data_processing_bronx>> task5_2_model_training_bronx_F
+    task4_1_data_processing_bronx>> task5_3_model_training_bronx_V
+
+    task4_2_data_processing_manhatan>> task6_1_model_training_manhatan_M
+    task4_2_data_processing_manhatan>> task6_2_model_training_manhatan_F
+    task4_2_data_processing_manhatan>> task6_3_model_training_manhatan_V

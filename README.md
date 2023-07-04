@@ -15,3 +15,6 @@ Proyecto final introducción a la ciencia de datos
 
 # Check the postgres database
 *  psql -U airflow -d airflow -h postgres -p 5432
+
+# Arima bug
+* https://machinelearningmastery.com/save-arima-time-series-forecasting-model-python/
