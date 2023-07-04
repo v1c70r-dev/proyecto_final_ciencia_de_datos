@@ -1,0 +1,5 @@
+env
+logs/dag_id*
+logs/scheduler/*
+dags/__pycache__
+data/*
