@@ -5,7 +5,7 @@ from airflow.hooks.postgres_hook import PostgresHook
 from datetime import datetime, timedelta
 import pandas as pd
 import psycopg2
-#from statsmodels.tsa.arima.model import ARIMA #, ARIMAResults
+from statsmodels.tsa.arima.model import ARIMA #, ARIMAResults
 
 
 ## From csv to data table
@@ -19,7 +19,6 @@ def local_csv_to_data_base(filename, **context):
         password='airflow'
     )
     cursor = conn.cursor()
-    
     # Check if the table is empty
     cursor.execute("SELECT COUNT(*) FROM nydp_arrest_data")
     table_count = cursor.fetchone()[0]
@@ -141,12 +140,6 @@ def data_processing(**context):
     df_clean = clean_data(df)
     # Filter data, allowing only the values M, F and V in the dataframe
     df_filtered = filter_arrest_data_by_category(df_clean)
-    df_filtered_json = df_filtered.to_json()
-    context['ti'].xcom_push(key='df_filtered', value=df_filtered_json)
-    return "Data filtered created"
-
-def data_processing_bronx(**context):
-    df_filtered = context['ti'].xcom_pull(key='df_filtered')
     # data from bronx
     dataBronx_M_vis, dataBronx_F_vis, dataBronx_V_vis = data_bronx_by_type_of_crime(df_filtered)
     # Convert DataFrame to JSON string
@@ -157,21 +150,17 @@ def data_processing_bronx(**context):
     context['ti'].xcom_push(key='dataBronx_M_vis', value=dataBronx_M_vis_json)
     context['ti'].xcom_push(key='dataBronx_F_vis', value=dataBronx_F_vis_json)
     context['ti'].xcom_push(key='dataBronx_V_vis', value=dataBronx_V_vis_json)
-    return "bronx data is processed"
-    
-def data_processing_manhatan(**context):
-    df_filtered = context['ti'].xcom_pull(key='df_filtered')
     # data from manhatan
     dataManhatan_M_vis, dataManhatan_F_vis, dataManhatan_V_vis = data_manhatan_by_type_of_crime(df_filtered)
     # Convert DataFrame to JSON string
     dataManhatan_M_vis_json = dataManhatan_M_vis.to_json()
     dataManhatan_F_vis_json = dataManhatan_F_vis.to_json()
     dataManhatan_V_vis_json = dataManhatan_V_vis.to_json()
-    # data from bronx in xcom
     context['ti'].xcom_push(key='dataManhatan_M_vis', value=dataManhatan_M_vis_json)
     context['ti'].xcom_push(key='dataManhatan_F_vis', value=dataManhatan_F_vis_json)
     context['ti'].xcom_push(key='dataManhatan_V_vis', value=dataManhatan_V_vis_json)
-    return "manhatan data is processed"
+    return "Data processing success"
+
 ##################################################################################
 ################## utils for model training  #####################################
 ##################################################################################
@@ -319,21 +308,51 @@ def train_model_for_dataManhatan_V_vis(**context):
     context['ti'].xcom_push(key='model_manhatan_V', value=model_path)
     return "model_manhatan_V.pkl created"
 
-def model_training(**context):
-    return
-    
-
 ##################################################################################
 ################## utils for model inference  ####################################
 ##################################################################################
 
-# def model_inference(models_name, **context):
+def rolling_prediction(ts, p, d, q, weeks, table_name, **context):
+    # Pull the data from XCom
+    data = context['ti'].xcom_pull(key=ts)
+    # Convert the data to a pandas DataFrame
+    ts = pd.read_json(data)
+    """
+    ts = time series
+    p = ar_order
+    d = diff_order
+    q = ma_order
+    weeks: number of weeks (in our case) the model can predict
+    """
+    test_size = int(weeks)
+    rolling_predictions = []
+    for i in range(test_size):
+        train = ts[:-(test_size-i)]
+        model = ARIMA(train,order = (int(p), int(d), int(q)))
+        model_fit = model.fit()
+        pred = model_fit.forecast(steps=1)
+        rolling_predictions.append(pred.values[0])
+    #list to dataframe
+    df = pd.DataFrame({'week': range(len(rolling_predictions)), 'prediction': rolling_predictions})
+    # df to database
+    conn = psycopg2.connect(
+        host='postgres',
+        port= 5432,
+        database='airflow',
+        user='airflow',
+        password='airflow'
+    )
+    df.to_sql(table_name, conn, if_exists='replace', index=False)
+    conn.commit()
+    conn.close()
+
+# def model_inference(model_name, weeks,  **context):
 #     # monkey patch around bug in ARIMA class
-#     def __getnewargs__(self):
-#      return ((self.endog),(self.k_lags, self.k_diff, self.k_ma))
-#     ARIMA.__getnewargs__ = __getnewargs__
+#     #def __getnewargs__(self):
+#     # return ((self.endog),(self.k_lags, self.k_diff, self.k_ma))
+#     #ARIMA.__getnewargs__ = __getnewargs__
 #     # load model
-#     loaded = ARIMAResults.load('{models_name}.pkl')
+#     #loaded = ARIMAResults.load('{models_name}.pkl')
 #     return
 
 
@@ -348,7 +367,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id='proc_test_v07',
+    dag_id='proc_test_v08',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
@@ -401,18 +420,6 @@ with DAG(
         provide_context = True
     )
 
-    task4_1_data_processing_bronx = PythonOperator(
-        task_id = 'data_processing_bronx_',
-        python_callable = data_processing_bronx,
-        provide_context = True
-    )
-
-    task4_2_data_processing_manhatan = PythonOperator(
-        task_id = 'data_processing_manhatan_',
-        python_callable = data_processing_manhatan,
-        provide_context = True
-    )
-
     task5_1_model_training_bronx_M = PythonOperator(
         task_id = 'model_training_bronx_M',
         python_callable = train_model_for_dataBronx_M_vis,
@@ -431,25 +438,131 @@ with DAG(
         provide_context = True
     ) 
 
-    task6_1_model_training_manhatan_M = PythonOperator(
+    task5_4_model_training_manhatan_M = PythonOperator(
         task_id = 'model_training_manhatan_M',
         python_callable = train_model_for_dataManhatan_M_vis,
         provide_context = True
     )
 
-    task6_2_model_training_manhatan_F = PythonOperator(
+    task5_5_model_training_manhatan_F = PythonOperator(
         task_id = 'model_training_manhatan_F',
         python_callable = train_model_for_dataManhatan_F_vis,
         provide_context = True
     )
     
-    task6_3_model_training_manhatan_V = PythonOperator(
+    task5_6_model_training_manhatan_V = PythonOperator(
         task_id = 'model_training_manhatan_V',
         python_callable = train_model_for_dataManhatan_V_vis,
         provide_context = True
     )
 
-   
+    task6_1_create_psql_table_bronx_M = PostgresOperator(
+        task_id = 'create_psql_table_bronx_M',
+        postgres_conn_id = 'postgres',
+        sql = """
+        create table if not exists predictions_bronx_M(
+        week INT not null,
+        prediction REAL not null);
+        """
+    )
+
+    task6_2_create_psql_table_bronx_F = PostgresOperator(
+        task_id = 'create_psql_table_bronx_F',
+        postgres_conn_id = 'postgres',
+        sql = """
+        create table if not exists predictions_bronx_F(
+        week INT not null,
+        prediction REAL not null);
+        """
+    )
+
+    task6_3_create_psql_table_bronx_V = PostgresOperator(
+        task_id = 'create_psql_table_bronx_V',
+        postgres_conn_id = 'postgres',
+        sql = """
+        create table if not exists predictions_bronx_V(
+        week INT not null,
+        prediction REAL not null);
+        """
+    )
+
+    task6_4_create_psql_table_manhatan_M = PostgresOperator(
+        task_id = 'create_psql_table_manhatan_M',
+        postgres_conn_id = 'postgres',
+        sql = """
+        create table if not exists predictions_manhatan_M(
+        week INT not null,
+        prediction REAL not null);
+        """
+    )
+
+    task6_5_create_psql_table_manhatan_F = PostgresOperator(
+        task_id = 'create_psql_table_manhatan_F',
+        postgres_conn_id = 'postgres',
+        sql = """
+        create table if not exists predictions_manhatan_F(
+        week INT not null,
+        prediction REAL not null);
+        """
+    )
+
+    task6_6_create_psql_table_manhatan_V = PostgresOperator(
+        task_id = 'create_psql_table_manhatan_V',
+        postgres_conn_id = 'postgres',
+        sql = """
+        create table if not exists predictions_manhatan_V(
+        week INT not null,
+        prediction REAL not null);
+        """
+    )
+
+    task7_1_model_inference = PythonOperator(
+        task_id = 'model_inference_bronx_M',
+        python_callable = rolling_prediction,
+        #op_kwargs = {'model_name': 'model_bronx_M', 'weeks': 53},
+        op_kwargs = {'ts':'model_bronx_M', 'p':'1', 'd':'1', 'q':'0', 'weeks': '53', 'table_name':'predictions_bronx_M'},
+        provide_context = True
+    )
+
+    task7_2_model_inference = PythonOperator(
+        task_id = 'model_inference_bronx_F',
+        python_callable = rolling_prediction,
+        #op_kwargs = {'model_name': 'model_bronx_F', 'weeks': 53},
+        op_kwargs = {'ts':'model_bronx_F', 'p':'1', 'd':'1', 'q':'0', 'weeks': '53', 'table_name':'predictions_bronx_F'},
+        provide_context = True
+    )
+
+    task7_3_model_inference = PythonOperator(
+        task_id = 'model_inference_bronx_V',
+        python_callable = rolling_prediction,
+        #op_kwargs = {'model_name': 'model_bronx_V', 'weeks': 53},
+        op_kwargs = {'ts':'model_bronx_V', 'p':'1', 'd':'1', 'q':'0', 'weeks': '53', 'table_name':'predictions_bronx_V'},
+        provide_context = True
+    )
+
+    task7_4_model_inference = PythonOperator(
+        task_id = 'model_inference_manhatan_M',
+        python_callable = rolling_prediction,
+        #op_kwargs = {'model_name': 'model_manhatan_M', 'weeks': 53},
+        op_kwargs = {'ts':'model_manhatan_M', 'p':'1', 'd':'1', 'q':'0', 'weeks': '53', 'table_name':'predictions_manhatan_M'},
+        provide_context = True
+    )
+
+    task7_5_model_inference = PythonOperator(
+        task_id = 'model_inference_manhatan_F',
+        python_callable = rolling_prediction,
+        #op_kwargs = {'model_name': 'model_manhatan_F', 'weeks': 53},
+        op_kwargs = {'ts':'model_manhatan_F', 'p':'1', 'd':'1', 'q':'0', 'weeks': '53', 'table_name':'predictions_manhatan_F'},
+        provide_context = True
+    )
+
+    task7_6_model_inference = PythonOperator(
+        task_id = 'model_inference_manhatan_V',
+        python_callable = rolling_prediction,
+        #op_kwargs = {'model_name': 'model_manhatan_V', 'weeks': 53},
+        op_kwargs = {'ts':'model_manhatan_V', 'p':'1', 'd':'1', 'q':'0', 'weeks': '53', 'table_name':'predictions_manhatan_V'},
+        provide_context = True
+    )
 
     #############################################
     #############################################
@@ -458,14 +571,11 @@ with DAG(
     #############################################
     
     task1_create_postgres_table>> task2_local_csv_to_data_base>> task3_data_extraction >> task4_data_processing 
-    
-    task4_data_processing>> task4_1_data_processing_bronx
-    task4_data_processing>> task4_2_data_processing_manhatan
 
-    task4_1_data_processing_bronx>> task5_1_model_training_bronx_M
-    task4_1_data_processing_bronx>> task5_2_model_training_bronx_F
-    task4_1_data_processing_bronx>> task5_3_model_training_bronx_V
+    task4_data_processing>> task5_1_model_training_bronx_M >> task6_1_create_psql_table_bronx_M >> task7_1_model_inference
+    task4_data_processing>> task5_2_model_training_bronx_F >> task6_2_create_psql_table_bronx_F >> task7_2_model_inference
+    task4_data_processing>> task5_3_model_training_bronx_V >> task6_3_create_psql_table_bronx_V >> task7_3_model_inference
 
-    task4_2_data_processing_manhatan>> task6_1_model_training_manhatan_M
-    task4_2_data_processing_manhatan>> task6_2_model_training_manhatan_F
-    task4_2_data_processing_manhatan>> task6_3_model_training_manhatan_V
+    task4_data_processing>> task5_4_model_training_manhatan_M >> task6_4_create_psql_table_manhatan_M >> task7_4_model_inference
+    task4_data_processing>> task5_5_model_training_manhatan_F >> task6_5_create_psql_table_manhatan_F >> task7_5_model_inference
+    task4_data_processing>> task5_6_model_training_manhatan_V >> task6_6_create_psql_table_manhatan_V >> task7_6_model_inference
