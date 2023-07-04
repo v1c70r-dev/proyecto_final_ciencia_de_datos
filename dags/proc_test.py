@@ -2,7 +2,7 @@ from airflow import DAG
 from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.operators.python_operator import PythonOperator
 from airflow.hooks.postgres_hook import PostgresHook
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import psycopg2
 #import statsmodels
@@ -40,24 +40,22 @@ def local_csv_to_data_base(filename, **context):
         print(f"Number of rows affected: {rows_affected}")
     else:
         print("Table is not empty. Skipping data insertion.")
-    
     cursor.close()
     conn.close()
 
 
-# def retrieve_data(**context):
-#     # Create a PostgresHook
-#     pg_hook = PostgresHook(postgres_conn_id='postgres')
-
-#     # Retrieve data from the table
-#     with pg_hook.get_conn() as connection:
-#         with connection.cursor() as cursor:
-#             cursor.execute("SELECT ARREST_KEY,ARREST_DATE,PD_CD,PD_DESC,KY_CD,OFNS_DESC,LAW_CODE,LAW_CAT_CD,ARREST_BORO,ARREST_PRECINCT,JURISDICTION_CODE,AGE_GROUP,PERP_SEX,PERP_RACE,X_COORD_CD,Y_COORD_CD,Latitude,Longitude,Lon_Lat FROM nydp_arrest_data")
-#             while True:
-#                 batch = cursor.fetchmany(1000)
-#                 if not batch:
-#                     break
-#                 context['ti'].xcom_push(key='nydp_arrest_data_xcom', value=batch)
+#def retrieve_data(**context):
+#    # Create a PostgresHook
+#    pg_hook = PostgresHook(postgres_conn_id='postgres')
+#    # Retrieve data from the table
+#    with pg_hook.get_conn() as connection:
+#        with connection.cursor() as cursor:
+#            cursor.execute("SELECT ARREST_KEY,ARREST_DATE,PD_CD,PD_DESC,KY_CD,OFNS_DESC,LAW_CODE,LAW_CAT_CD,ARREST_BORO,ARREST_PRECINCT,JURISDICTION_CODE,AGE_GROUP,PERP_SEX,PERP_RACE,X_COORD_CD,Y_COORD_CD,Latitude,Longitude,Lon_Lat FROM nydp_arrest_data")
+#            while True:
+#                batch = cursor.fetchmany(1000)
+#                if not batch:
+#                    break
+#                context['ti'].xcom_push(key='nydp_arrest_data_xcom', value=batch)
 
 def retrieve_data(**context):
     # Create a PostgresHook
@@ -65,7 +63,7 @@ def retrieve_data(**context):
     # Retrieve data from the table
     connection = pg_hook.get_conn()
     cursor = connection.cursor()
-    cursor.execute("SELECT * FROM nydp_arrest_data")
+    cursor.execute("SELECT * FROM nydp_arrest_data limit 4000") #***************  CHANGE THISSSSSSS!!!!!!!!!!!!!!!!!!!!!!!!! ******************* (no limit)
     result = cursor.fetchall()
     # Push the data to XCom
     context['ti'].xcom_push(key='nydp_arrest_data_xcom', value=result)
@@ -99,7 +97,7 @@ def clean_data(data_frame):
 def filter_arrest_data_by_category(data_frame):
     df = data_frame.copy()
     # Transform str to date type
-    df = df['ARREST_DATE'] = pd.to_datetime(df.ARREST_DATE)
+    df['ARREST_DATE'] = pd.to_datetime(df.ARREST_DATE)
     # Rows that do not have the type of crime M, F or V, are eliminated
     df = df.dropna(subset=['LAW_CAT_CD'])
     allowed_values = ['M', 'F', 'V']
@@ -143,18 +141,28 @@ def data_processing(**context):
     df_clean = clean_data(df)
     # Filter data, allowing only the values M, F and V in the dataframe
     df_filtered = filter_arrest_data_by_category(df_clean)
+
     # data from bronx
     dataBronx_M_vis, dataBronx_F_vis, dataBronx_V_vis = data_bronx_by_type_of_crime(df_filtered)
+    # Convert DataFrame to JSON string
+    dataBronx_M_vis_json = dataBronx_M_vis.to_json()
+    dataBronx_F_vis_json = dataBronx_F_vis.to_json()
+    dataBronx_V_vis_json = dataBronx_V_vis.to_json()
     # data from bronx in xcom
-    context['ti'].xcom_push(key='dataBronx_M_vis', value=dataBronx_M_vis)
-    context['ti'].xcom_push(key='dataBronx_F_vis', value=dataBronx_F_vis)
-    context['ti'].xcom_push(key='dataBronx_V_vis', value=dataBronx_V_vis)
+    context['ti'].xcom_push(key='dataBronx_M_vis', value=dataBronx_M_vis_json)
+    context['ti'].xcom_push(key='dataBronx_F_vis', value=dataBronx_F_vis_json)
+    context['ti'].xcom_push(key='dataBronx_V_vis', value=dataBronx_V_vis_json)
+    
     # data from manhatan
     dataManhatan_M_vis, dataManhatan_F_vis, dataManhatan_V_vis = data_manhatan_by_type_of_crime(df_filtered)
+    # Convert DataFrame to JSON string
+    dataManhatan_M_vis_json = dataManhatan_M_vis.to_json()
+    dataManhatan_F_vis_json = dataManhatan_F_vis.to_json()
+    dataManhatan_V_vis_json = dataManhatan_V_vis.to_json()
     # data from bronx in xcom
-    context['ti'].xcom_push(key='dataManhatan_M_vis', value=dataManhatan_M_vis)
-    context['ti'].xcom_push(key='dataManhatan_F_vis', value=dataManhatan_F_vis)
-    context['ti'].xcom_push(key='dataManhatan_V_vis', value=dataManhatan_V_vis)
+    context['ti'].xcom_push(key='dataManhatan_M_vis', value=dataManhatan_M_vis_json)
+    context['ti'].xcom_push(key='dataManhatan_F_vis', value=dataManhatan_F_vis_json)
+    context['ti'].xcom_push(key='dataManhatan_V_vis', value=dataManhatan_V_vis_json)
 
 ##################################################################################
 ################## utils for model training  #####################################
@@ -266,10 +274,11 @@ default_args = {
 }
 
 with DAG(
-    dag_id='proc_test_v05',
+    dag_id='proc_test_v06',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
-    catchup = False
+    catchup = False,
+    dagrun_timeout=timedelta(minutes=10)
     ) as dag:
 
     task1_create_postgres_table = PostgresOperator(
