@@ -6,8 +6,104 @@ from datetime import datetime, timedelta
 import pandas as pd
 import psycopg2
 from statsmodels.tsa.arima.model import ARIMA #, ARIMAResults
+from statsmodels.tsa.seasonal import seasonal_decompose
 import sqlalchemy
 import json
+
+
+
+##create tables
+def create_tables():
+    # Establish a connection to the PostgreSQL database
+    with open('/opt/airflow/data/settings.json', 'r') as file:
+        settings = json.load(file)
+    conn = psycopg2.connect(
+        host = settings["HOST"],
+        port = settings["PORT"],
+        database = settings["DATABASE"],
+        user = settings["USER"],
+        password = settings["PASSWORD"]
+    )
+    # Create a cursor object to interact with the database
+    cur = conn.cursor()
+    # Create the first table
+    cur.execute("""
+        create table if not exists nydp_arrest_data(
+        ARREST_KEY TEXT,
+        ARREST_DATE TEXT,
+        PD_CD TEXT,
+        PD_DESC TEXT,
+        KY_CD TEXT,
+        OFNS_DESC TEXT,
+        LAW_CODE TEXT,
+        LAW_CAT_CD TEXT,
+        ARREST_BORO TEXT,
+        ARREST_PRECINCT INTEGER,
+        JURISDICTION_CODE REAL,
+        AGE_GROUP TEXT,
+        PERP_SEX TEXT,
+        PERP_RACE TEXT,
+        X_COORD_CD REAL,
+        Y_COORD_CD REAL,
+        Latitude REAL,
+        Longitude REAL,
+        Lon_Lat TEXT);
+        """)
+
+    # Create table predictions_bronx_m
+    cur.execute(
+        """
+            create table if not exists predictions_bronx_m(
+            week INT not null,
+            prediction REAL not null);
+        """)
+    # Create table predictions_bronx_f
+    cur.execute(
+        """
+            create table if not exists predictions_bronx_f(
+            week INT not null,
+            prediction REAL not null);
+        """)
+
+    # Create table predictions_bronx_v
+    cur.execute(
+        """
+            create table if not exists predictions_bronx_v(
+            week INT not null,
+            prediction REAL not null);
+        """)
+
+    # Create table predictions_manhatan_m
+    cur.execute("""
+            create table if not exists predictions_manhatan_m(
+            week INT not null,
+            prediction REAL not null);
+            """
+        )
+
+    # Create table predictions_manhatan_f
+    cur.execute("""
+            create table if not exists predictions_manhatan_f(
+            week INT not null,
+            prediction REAL not null);
+            """
+        )
+
+    # Create table predictions_manhatan_v
+    cur.execute("""
+            create table if not exists predictions_manhatan_v(
+            week INT not null,
+            prediction REAL not null);
+            """
+        )
+
+    # Commit the changes to the database
+    conn.commit()
+
+    # Close the cursor and the database connection
+    cur.close()
+    conn.close()
+
 
 ## From csv to data table
 def local_csv_to_data_base(filename, **context):
@@ -52,13 +148,13 @@ def retrieve_data(**context):
     # Retrieve data from the table
     connection = pg_hook.get_conn()
     cursor = connection.cursor()
-    cursor.execute("SELECT ARREST_DATE, LAW_CAT_CD, ARREST_BORO FROM nydp_arrest_data limit 60000") #***************  CHANGE THISSSSSSS!!!!!!!!!!!!!!!!!!!!!!!!! ******************* (no limit)
+    cursor.execute("SELECT ARREST_DATE, LAW_CAT_CD, ARREST_BORO FROM nydp_arrest_data WHERE ARREST_BORO IN ('M', 'B');") #***************  CHANGE THISSSSSSS!!!!!!!!!!!!!!!!!!!!!!!!! ******************* (no limit)
     result = cursor.fetchall()
     # Push the data to XCom
     context['ti'].xcom_push(key='nydp_arrest_data_xcom', value=result)
 
 ##################################################################################
-################## utils for processing data #####################################
+################## Utils for processing data #####################################
 ##################################################################################
 
 def clean_data(data_frame):
@@ -163,8 +259,9 @@ def rolling_prediction(ts, p, d, q, weeks, **context):
     load = df.to_json()
     context['ti'].xcom_push(key=key_name, value=load)
 
-def forecastARIMA(ts, p, d, q, **context):
-    key_name = '{}_prediction'.format(ts)
+def forecastARIMA(ts, p, d, q, weeks,  **context):
+    key_name = '{}_model'.format(ts)
+    key_name_seasonal = "seasonal_"+key_name
     # Pull the data from XCom
     data = context['ti'].xcom_pull(key=ts)
     # Convert the data to a pandas DataFrame
@@ -175,29 +272,41 @@ def forecastARIMA(ts, p, d, q, **context):
     d = diff_order
     q = ma_order
     """
-    train = ts#[:-weeks]
+    train = ts[:-weeks]
     model = ARIMA(train,order = (p, d, q))
     model_fit = model.fit()
-
-
-    # Save model
+    seasonal = seasonal_decompose(train,model='additive')
+    # model's path
     model_path = key_name+'.pkl'
+    seasonal_path = key_name_seasonal + '.pkl'
+    #Save the models
     model_fit.save(model_path)
+    seasonal.save(seasonal_path)
     # Push model path using xcom_push()
     context['ti'].xcom_push(key=key_name, value=model_path)
+    context['ti'].xcom_push(key=key_name_seasonal, value=seasonal_path)
+
 
 ##################################################################################
 ################## utils for model inference  ####################################
 ##################################################################################
 
 def predict_models(model, table_name, weeks, **context):
+    seasonal_key = "seasonal_" + model
     model_fit = context['ti'].xcom_pull(key=model)
+    seasonal_ = context['ti'].xcom_pull(key=seasonal_key)
+
+    seasonal = seasonal_.seasonal[-weeks:]
     pred = model_fit.forecast(steps=weeks)
-    pred_values = pred.values
+    
+    pred_values = pred.values + seasonal.values
     predictions = pd.DataFrame({'week': range(len(pred_values)), 'prediction': pred_values})
     
     # df to database
-    engine = sqlalchemy.create_engine('postgresql+psycopg2://airflow:airflow@postgres:5432/airflow')
+    with open('/opt/airflow/data/settings.json', 'r') as file:
+        settings = json.load(file)
+    engine_str = 'postgresql+psycopg2://%s:%s@%s:%s/%s'%(settings["USER"], settings["PASSWORD"], settings["PORT"], settings["HOST"], settings["DATABASE"])
+    engine = sqlalchemy.create_engine(engine_str)
     with open('/opt/airflow/data/settings.json', 'r') as file:
         settings = json.load(file)     
     conn = psycopg2.connect(
@@ -216,48 +325,27 @@ def predict_models(model, table_name, weeks, **context):
 
 #############################################
 #############################################
-#####             Dags                 ######
+#####             Dag                  ######
 #############################################
 #############################################
 
 default_args = {
-    'timeout': 300 #5 minutes
+    'timeout': 300, #5 minutes
+    'retries': 2,
 }
 
 with DAG(
-    dag_id='proc_main_v06',
+    dag_id='proc_main_v07',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
     dagrun_timeout=timedelta(minutes=10)
     ) as dag:
 
-    task1_0_create_postgres_table = PostgresOperator(
-        task_id = 'create_postgres_table',
-        postgres_conn_id = 'postgres',
-        sql = """
-            create table if not exists nydp_arrest_data(
-            ARREST_KEY TEXT,
-            ARREST_DATE TEXT,
-            PD_CD TEXT,
-            PD_DESC TEXT,
-            KY_CD TEXT,
-            OFNS_DESC TEXT,
-            LAW_CODE TEXT,
-            LAW_CAT_CD TEXT,
-            ARREST_BORO TEXT,
-            ARREST_PRECINCT INTEGER,
-            JURISDICTION_CODE REAL,
-            AGE_GROUP TEXT,
-            PERP_SEX TEXT,
-            PERP_RACE TEXT,
-            X_COORD_CD REAL,
-            Y_COORD_CD REAL,
-            Latitude REAL,
-            Longitude REAL,
-            Lon_Lat TEXT);
-        """
-    )
+    task1_create_postgres_tables = PythonOperator(
+        task_id = 'create_postgres_tables',
+        python_callable = create_tables,
+    ) 
 
     task2_local_csv_to_data_base = PythonOperator(
         task_id = 'local_csv_to_data_base_',
@@ -279,152 +367,92 @@ with DAG(
     )
 
     ######### bronx m ################
-    task1_1_create_psql_table_bronx_M = PostgresOperator(
-        task_id = 'create_psql_table_bronx_M',
-        postgres_conn_id = 'postgres',
-        sql = """
-        create table if not exists predictions_bronx_m(
-        week INT not null,
-        prediction REAL not null);
-        """
-    )
 
     task6_1_train_model_bronx_M = PythonOperator(
         task_id = 'model_train_bronx_M',
         python_callable = forecastARIMA,
-        op_kwargs = {'ts':'dataBronx_M_vis', 'p':1, 'd':1, 'q':0}, 
+        op_kwargs = {'ts':'dataBronx_M_vis', 'p':13, 'd':1, 'q':0, 'weeks': 53}, 
         provide_context = True
     )
 
     task7_1_predict_bronx_M  = PythonOperator(
         task_id = 'model_predict_bronx_M',
         python_callable = predict_models,
-        op_kwargs = {'model': 'dataBronx_M_vis_prediction','table_name':'predictions_bronx_m', 'weeks': 53},
+        op_kwargs = {'model': 'dataBronx_M_vis_model','table_name':'predictions_bronx_m', 'weeks': 53},
         provide_context = True
-    )
-
-    ######### bronx f ################
-    task1_2_create_psql_table_bronx_F = PostgresOperator(
-        task_id = 'create_psql_table_bronx_F',
-        postgres_conn_id = 'postgres',
-        sql = """
-        create table if not exists predictions_bronx_f(
-        week INT not null,
-        prediction REAL not null);
-        """
     )
 
     task6_2_train_model_bronx_F = PythonOperator(
         task_id = 'model_train_bronx_F',
         python_callable = forecastARIMA,
-        op_kwargs = {'ts':'dataBronx_F_vis', 'p':1, 'd':1, 'q':0}, 
+        op_kwargs = {'ts':'dataBronx_F_vis', 'p':13, 'd':1, 'q':0, 'weeks': 53}, 
         provide_context = True
     )
 
     task7_2_predict_bronx_F  = PythonOperator(
         task_id = 'model_predict_bronx_F',
         python_callable = predict_models,
-        op_kwargs = {'model': 'dataBronx_F_vis_prediction','table_name':'predictions_bronx_f', 'weeks': 53},
+        op_kwargs = {'model': 'dataBronx_F_vis_model','table_name':'predictions_bronx_f', 'weeks': 53},
         provide_context = True
-    )
-
-    ######### bronx v ################
-    task1_3_create_psql_table_bronx_V = PostgresOperator(
-        task_id = 'create_psql_table_bronx_V',
-        postgres_conn_id = 'postgres',
-        sql = """
-        create table if not exists predictions_bronx_v(
-        week INT not null,
-        prediction REAL not null);
-        """
     )
 
     task6_3_train_model_bronx_V = PythonOperator(
         task_id = 'model_train_bronx_V',
         python_callable = forecastARIMA,
-        op_kwargs = {'ts':'dataBronx_V_vis', 'p':1, 'd':1, 'q':0}, 
+        op_kwargs = {'ts':'dataBronx_V_vis', 'p':17, 'd':2, 'q':11, 'weeks': 53}, 
         provide_context = True
     )
 
     task7_3_predict_bronx_V  = PythonOperator(
         task_id = 'model_predict_bronx_V',
         python_callable = predict_models,
-        op_kwargs = {'model': 'dataBronx_V_vis_prediction','table_name':'predictions_bronx_v', 'weeks': 53},
+        op_kwargs = {'model': 'dataBronx_V_vis_model','table_name':'predictions_bronx_v', 'weeks': 53},
         provide_context = True
     )
 
     #############################################################################################################################
     ######### manhatan m ################
-    task1_4_create_psql_table_manhatan_M = PostgresOperator(
-        task_id = 'create_psql_table_manhatan_M',
-        postgres_conn_id = 'postgres',
-        sql = """
-        create table if not exists predictions_manhatan_m(
-        week INT not null,
-        prediction REAL not null);
-        """
-    )
 
     task8_1_train_model_manhatan_M = PythonOperator(
         task_id = 'model_train_manhatan_M',
         python_callable = forecastARIMA,
-        op_kwargs = {'ts':'dataManhatan_M_vis', 'p':1, 'd':1, 'q':0}, 
+        op_kwargs = {'ts':'dataManhatan_M_vis', 'p':8, 'd':1, 'q':0, 'weeks': 53}, 
         provide_context = True
     )
 
     task9_1_predict_manhatan_M  = PythonOperator(
         task_id = 'model_predict_manhatan_M',
         python_callable = predict_models,
-        op_kwargs = {'model': 'dataManhatan_M_vis_prediction','table_name':'predictions_manhatan_m', 'weeks': 53},
+        op_kwargs = {'model': 'dataManhatan_M_vis_model','table_name':'predictions_manhatan_m', 'weeks': 53},
         provide_context = True
     )
 
     ######### manhatan f ################
-    task1_5_create_psql_table_manhatan_F = PostgresOperator(
-        task_id = 'create_psql_table_manhatan_F',
-        postgres_conn_id = 'postgres',
-        sql = """
-        create table if not exists predictions_manhatan_f(
-        week INT not null,
-        prediction REAL not null);
-        """
-    )
-
     task8_2_train_model_manhatan_F = PythonOperator(
         task_id = 'model_train_manhatan_F',
         python_callable = forecastARIMA,
-        op_kwargs = {'ts':'dataManhatan_F_vis', 'p':1, 'd':1, 'q':0}, 
+        op_kwargs = {'ts':'dataManhatan_F_vis', 'p':13, 'd':1, 'q':0, 'weeks': 53}, 
         provide_context = True
     )
 
     task9_2_predict_manhatan_F  = PythonOperator(
         task_id = 'model_predict_manhatan_F',
         python_callable = predict_models,
-        op_kwargs = {'model': 'dataManhatan_F_vis_prediction','table_name':'predictions_manhatan_f', 'weeks': 53},
+        op_kwargs = {'model': 'dataManhatan_F_vis_model','table_name':'predictions_manhatan_f', 'weeks': 53},
         provide_context = True
     )
     ######### manhatan v ################
-    task1_6_create_psql_table_manhatan_V = PostgresOperator(
-        task_id = 'create_psql_table_manhatan_V',
-        postgres_conn_id = 'postgres',
-        sql = """
-        create table if not exists predictions_manhatan_v(
-        week INT not null,
-        prediction REAL not null);
-        """
-    )
-
     task8_3_train_model_manhatan_V = PythonOperator(
         task_id = 'model_train_manhatan_V',
         python_callable = forecastARIMA,
-        op_kwargs = {'ts':'dataManhatan_V_vis', 'p':1, 'd':1, 'q':0}, 
+        op_kwargs = {'ts':'dataManhatan_V_vis', 'p':7, 'd':2, 'q':9, 'weeks': 53}, 
         provide_context = True
     )
 
     task9_3_predict_manhatan_V  = PythonOperator(
         task_id = 'model_predict_manhatan_V',
         python_callable = predict_models,
-        op_kwargs = {'model': 'dataManhatan_V_vis_prediction','table_name':'predictions_manhatan_v', 'weeks': 53},
+        op_kwargs = {'model': 'dataManhatan_V_vis_model','table_name':'predictions_manhatan_v', 'weeks': 53},
         provide_context = True
     )
     #############################################
@@ -433,13 +461,13 @@ with DAG(
     #############################################
     #############################################
     
-    task1_0_create_postgres_table >>task2_local_csv_to_data_base >> task3_data_extraction >> task4_data_processing 
+    task1_create_postgres_tables >>task2_local_csv_to_data_base >> task3_data_extraction >> task4_data_processing 
     
-    task4_data_processing >> task1_1_create_psql_table_bronx_M >> task6_1_train_model_bronx_M >> task7_1_predict_bronx_M
-    task4_data_processing >> task1_2_create_psql_table_bronx_F >> task6_2_train_model_bronx_F >> task7_2_predict_bronx_F
-    task4_data_processing >> task1_3_create_psql_table_bronx_V >> task6_3_train_model_bronx_V >> task7_3_predict_bronx_V
+    task4_data_processing >> task6_1_train_model_bronx_M >> task7_1_predict_bronx_M
+    task4_data_processing >> task6_2_train_model_bronx_F >> task7_2_predict_bronx_F
+    task4_data_processing >> task6_3_train_model_bronx_V >> task7_3_predict_bronx_V
 
-    task4_data_processing >> task1_4_create_psql_table_manhatan_M >>  task8_1_train_model_manhatan_M >> task9_1_predict_manhatan_M
-    task4_data_processing >> task1_5_create_psql_table_manhatan_F >> task8_2_train_model_manhatan_F >> task9_2_predict_manhatan_F
-    task4_data_processing >> task1_6_create_psql_table_manhatan_V >> task8_3_train_model_manhatan_V >> task9_3_predict_manhatan_V
+    task4_data_processing >> task8_1_train_model_manhatan_M >> task9_1_predict_manhatan_M
+    task4_data_processing >> task8_2_train_model_manhatan_F >> task9_2_predict_manhatan_F
+    task4_data_processing >> task8_3_train_model_manhatan_V >> task9_3_predict_manhatan_V
     
