@@ -26,29 +26,7 @@ def create_tables():
     )
     # Create a cursor object to interact with the database
     cur = conn.cursor()
-    # Create the first table
-    # cur.execute("""
-    #     create table if not exists nydp_arrest_data(
-    #     ARREST_KEY TEXT,
-    #     ARREST_DATE TEXT,
-    #     PD_CD TEXT,
-    #     PD_DESC TEXT,
-    #     KY_CD TEXT,
-    #     OFNS_DESC TEXT,
-    #     LAW_CODE TEXT,
-    #     LAW_CAT_CD TEXT,
-    #     ARREST_BORO TEXT,
-    #     ARREST_PRECINCT INTEGER,
-    #     JURISDICTION_CODE REAL,
-    #     AGE_GROUP TEXT,
-    #     PERP_SEX TEXT,
-    #     PERP_RACE TEXT,
-    #     X_COORD_CD REAL,
-    #     Y_COORD_CD REAL,
-    #     Latitude REAL,
-    #     Longitude REAL,
-    #     Lon_Lat TEXT);
-    #     """)
+
     cur.execute("""
         create table if not exists nydp_arrest_data(
         INDEX INT,
@@ -112,6 +90,12 @@ def create_tables():
     conn.close()
 
 
+def original_csv_to_modified_csv():
+    data = pd.read_csv("/opt/airflow/data/NYPD_Arrests_Data__Historic_.csv")
+    data2 = data[['ARREST_DATE','LAW_CAT_CD','ARREST_BORO']].dropna()
+    data2 = data2[(data2['ARREST_BORO'] == 'M') | (data2['ARREST_BORO'] == 'B')]
+    data2.to_csv('/opt/airflow/data/NYPD_Arrests_Data__Historic_Modificado.csv')
+
 # From csv to data table
 def local_csv_to_data_base(filename, **context):
     file_path = f'/opt/airflow/data/{filename}' 
@@ -148,51 +132,6 @@ def local_csv_to_data_base(filename, **context):
         print("Table is not empty. Skipping data insertion.")
     cursor.close()
     conn.close()
-
-# def local_csv_to_data_base(filename, **context):
-#     file_path = f'/opt/airflow/data/{filename}' 
-
-#     with open('/opt/airflow/data/settings.json', 'r') as file:
-#         settings = json.load(file)
-#     conn = psycopg2.connect(
-#         host=settings["HOST"],
-#         port=settings["PORT"],
-#         database=settings["DATABASE"],
-#         user=settings["USER"],
-#         password=settings["PASSWORD"]
-#     )
-#     cursor = conn.cursor()
-#     # Check if the table is empty
-#     cursor.execute("SELECT COUNT(*) FROM nydp_arrest_data")
-#     table_count = cursor.fetchone()[0]
-#     if table_count == 0:
-#         with open(file_path, 'r') as f:
-#             csv_reader = csv.DictReader(f)
-#             rows_to_insert = []
-#             for row in csv_reader:
-#                 arrest_date = row.get('ARREST_DATE')
-#                 law_cat_cd = row.get('LAW_CAT_CD')
-#                 arrest_boro = row.get('ARREST_BORO')
-#                 if arrest_boro in ['M', 'B']:
-#                     rows_to_insert.append((arrest_date, law_cat_cd, arrest_boro))
-
-#             if rows_to_insert:
-#                 cursor.executemany(
-#                     """
-#                     INSERT INTO nydp_arrest_data (ARREST_DATE, LAW_CAT_CD, ARREST_BORO)
-#                     VALUES (%s, %s, %s)
-#                     """,
-#                     rows_to_insert
-#                 )
-
-#         # Commit the changes
-#         conn.commit()
-#         rows_affected = cursor.rowcount
-#         print(f"Number of rows affected: {rows_affected}")
-#     else:
-#         print("Table is not empty. Skipping data insertion.")
-#     cursor.close()
-#     conn.close()
 
 
 def retrieve_data(**context):
@@ -388,12 +327,17 @@ default_args = {
 }
 
 with DAG(
-    dag_id='proc_main_v09',
+    dag_id='proc_main_v10',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
     dagrun_timeout=timedelta(minutes=10)
     ) as dag:
+
+    task_0_csv_to_modified_csv = PythonOperator(
+        task_id = 'original_csv_to_modified_csv_',
+        python_callable = original_csv_to_modified_csv
+    )
 
     task1_create_postgres_tables = PythonOperator(
         task_id = 'create_postgres_tables',
@@ -514,7 +458,7 @@ with DAG(
     #############################################
     #############################################
     
-    task1_create_postgres_tables >>task2_local_csv_to_data_base >> task3_data_extraction >> task4_data_processing 
+    task_0_csv_to_modified_csv >> task1_create_postgres_tables >>task2_local_csv_to_data_base >> task3_data_extraction >> task4_data_processing 
     
     task4_data_processing >> task6_1_train_model_bronx_M >> task7_1_predict_bronx_M
     task4_data_processing >> task6_2_train_model_bronx_F >> task7_2_predict_bronx_F
