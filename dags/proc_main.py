@@ -9,7 +9,7 @@ from statsmodels.tsa.arima.model import ARIMA #, ARIMAResults
 from statsmodels.tsa.seasonal import seasonal_decompose
 import sqlalchemy
 import json
-
+import csv
 
 
 ##create tables
@@ -105,7 +105,7 @@ def create_tables():
     conn.close()
 
 
-## From csv to data table
+# From csv to data table
 def local_csv_to_data_base(filename, **context):
     file_path = f'/opt/airflow/data/{filename}' 
 
@@ -141,6 +141,52 @@ def local_csv_to_data_base(filename, **context):
         print("Table is not empty. Skipping data insertion.")
     cursor.close()
     conn.close()
+
+# def local_csv_to_data_base(filename, **context):
+#     file_path = f'/opt/airflow/data/{filename}' 
+
+#     with open('/opt/airflow/data/settings.json', 'r') as file:
+#         settings = json.load(file)
+#     conn = psycopg2.connect(
+#         host=settings["HOST"],
+#         port=settings["PORT"],
+#         database=settings["DATABASE"],
+#         user=settings["USER"],
+#         password=settings["PASSWORD"]
+#     )
+#     cursor = conn.cursor()
+#     # Check if the table is empty
+#     cursor.execute("SELECT COUNT(*) FROM nydp_arrest_data")
+#     table_count = cursor.fetchone()[0]
+#     if table_count == 0:
+#         with open(file_path, 'r') as f:
+#             csv_reader = csv.DictReader(f)
+#             rows_to_insert = []
+#             for row in csv_reader:
+#                 arrest_date = row.get('ARREST_DATE')
+#                 law_cat_cd = row.get('LAW_CAT_CD')
+#                 arrest_boro = row.get('ARREST_BORO')
+#                 if arrest_boro in ['M', 'B']:
+#                     rows_to_insert.append((arrest_date, law_cat_cd, arrest_boro))
+
+#             if rows_to_insert:
+#                 cursor.executemany(
+#                     """
+#                     INSERT INTO nydp_arrest_data (ARREST_DATE, LAW_CAT_CD, ARREST_BORO)
+#                     VALUES (%s, %s, %s)
+#                     """,
+#                     rows_to_insert
+#                 )
+
+#         # Commit the changes
+#         conn.commit()
+#         rows_affected = cursor.rowcount
+#         print(f"Number of rows affected: {rows_affected}")
+#     else:
+#         print("Table is not empty. Skipping data insertion.")
+#     cursor.close()
+#     conn.close()
+
 
 def retrieve_data(**context):
     # Create a PostgresHook
@@ -331,11 +377,11 @@ def predict_models(model, table_name, weeks, **context):
 
 default_args = {
     'timeout': 300, #5 minutes
-    'retries': 2,
+    'retries': 5,
 }
 
 with DAG(
-    dag_id='proc_main_v07',
+    dag_id='proc_main_v08',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
