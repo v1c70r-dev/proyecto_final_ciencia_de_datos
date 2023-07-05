@@ -2,4 +2,4 @@ env
 logs/dag_id*
 logs/scheduler/*
 dags/__pycache__
-data/*
+data/NYPD_Arrests_Data__Historic_.csv

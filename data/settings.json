@@ -1,0 +1,8 @@
+{
+    "HOST" : "postgres",
+    "PORT" : 5432,
+    "DATABASE" :"airflow",
+    "USER" :"airflow",
+    "PASSWORD" :"airflow"
+}
+    
