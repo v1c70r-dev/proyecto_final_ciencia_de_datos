@@ -3,3 +3,4 @@ pandas
 datetime
 psycopg2
 statsmodels==0.11.0
+sqlalchemy

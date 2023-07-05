@@ -5,7 +5,7 @@ from airflow.hooks.postgres_hook import PostgresHook
 from datetime import datetime, timedelta
 import pandas as pd
 import psycopg2
-from statsmodels.tsa.arima.model import ARIMA #, ARIMAResults
+from statsmodels.tsa.arima.model import ARIMA , ARIMAResults
 
 
 ## From csv to data table
@@ -367,7 +367,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id='proc_test_v08',
+    dag_id='proc_test_v09',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
