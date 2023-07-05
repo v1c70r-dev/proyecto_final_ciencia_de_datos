@@ -27,28 +27,35 @@ def create_tables():
     # Create a cursor object to interact with the database
     cur = conn.cursor()
     # Create the first table
+    # cur.execute("""
+    #     create table if not exists nydp_arrest_data(
+    #     ARREST_KEY TEXT,
+    #     ARREST_DATE TEXT,
+    #     PD_CD TEXT,
+    #     PD_DESC TEXT,
+    #     KY_CD TEXT,
+    #     OFNS_DESC TEXT,
+    #     LAW_CODE TEXT,
+    #     LAW_CAT_CD TEXT,
+    #     ARREST_BORO TEXT,
+    #     ARREST_PRECINCT INTEGER,
+    #     JURISDICTION_CODE REAL,
+    #     AGE_GROUP TEXT,
+    #     PERP_SEX TEXT,
+    #     PERP_RACE TEXT,
+    #     X_COORD_CD REAL,
+    #     Y_COORD_CD REAL,
+    #     Latitude REAL,
+    #     Longitude REAL,
+    #     Lon_Lat TEXT);
+    #     """)
     cur.execute("""
         create table if not exists nydp_arrest_data(
-        ARREST_KEY TEXT,
+        INDEX INT,
         ARREST_DATE TEXT,
-        PD_CD TEXT,
-        PD_DESC TEXT,
-        KY_CD TEXT,
-        OFNS_DESC TEXT,
-        LAW_CODE TEXT,
         LAW_CAT_CD TEXT,
-        ARREST_BORO TEXT,
-        ARREST_PRECINCT INTEGER,
-        JURISDICTION_CODE REAL,
-        AGE_GROUP TEXT,
-        PERP_SEX TEXT,
-        PERP_RACE TEXT,
-        X_COORD_CD REAL,
-        Y_COORD_CD REAL,
-        Latitude REAL,
-        Longitude REAL,
-        Lon_Lat TEXT);
-        """)
+        ARREST_BORO TEXT);
+    """)
 
     # Create table predictions_bronx_m
     cur.execute(
@@ -194,7 +201,7 @@ def retrieve_data(**context):
     # Retrieve data from the table
     connection = pg_hook.get_conn()
     cursor = connection.cursor()
-    cursor.execute("SELECT ARREST_DATE, LAW_CAT_CD, ARREST_BORO FROM nydp_arrest_data WHERE ARREST_BORO IN ('M', 'B');") #***************  CHANGE THISSSSSSS!!!!!!!!!!!!!!!!!!!!!!!!! ******************* (no limit)
+    cursor.execute("SELECT ARREST_DATE, LAW_CAT_CD, ARREST_BORO FROM nydp_arrest_data WHERE ARREST_BORO IN ('M', 'B') limit 200;") #***************  CHANGE THISSSSSSS!!!!!!!!!!!!!!!!!!!!!!!!! ******************* (no limit)
     result = cursor.fetchall()
     # Push the data to XCom
     context['ti'].xcom_push(key='nydp_arrest_data_xcom', value=result)
@@ -381,7 +388,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id='proc_main_v08',
+    dag_id='proc_main_v09',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
@@ -396,7 +403,7 @@ with DAG(
     task2_local_csv_to_data_base = PythonOperator(
         task_id = 'local_csv_to_data_base_',
         python_callable=local_csv_to_data_base,
-        op_kwargs = {'filename': 'NYPD_Arrests_Data__Historic_.csv'},
+        op_kwargs = {'filename': 'NYPD_Arrests_Data__Historic_Modificado.csv'},
         provide_context=True 
     )
 
