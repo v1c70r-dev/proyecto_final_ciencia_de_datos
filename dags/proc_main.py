@@ -327,7 +327,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id='proc_main_v10',
+    dag_id='proc_main_v11',
     start_date = datetime(2023, 1, 1),
     schedule = '@daily', 
     catchup = False,
@@ -458,13 +458,18 @@ with DAG(
     #############################################
     #############################################
     
+    # task_0_csv_to_modified_csv >> task1_create_postgres_tables >>task2_local_csv_to_data_base >> task3_data_extraction >> task4_data_processing 
+    
+    # task4_data_processing >> task6_1_train_model_bronx_M >> task7_1_predict_bronx_M
+    # task4_data_processing >> task6_2_train_model_bronx_F >> task7_2_predict_bronx_F
+    # task4_data_processing >> task6_3_train_model_bronx_V >> task7_3_predict_bronx_V
+
+    # task4_data_processing >> task8_1_train_model_manhatan_M >> task9_1_predict_manhatan_M
+    # task4_data_processing >> task8_2_train_model_manhatan_F >> task9_2_predict_manhatan_F
+    # task4_data_processing >> task8_3_train_model_manhatan_V >> task9_3_predict_manhatan_V
+
+
     task_0_csv_to_modified_csv >> task1_create_postgres_tables >>task2_local_csv_to_data_base >> task3_data_extraction >> task4_data_processing 
     
-    task4_data_processing >> task6_1_train_model_bronx_M >> task7_1_predict_bronx_M
-    task4_data_processing >> task6_2_train_model_bronx_F >> task7_2_predict_bronx_F
-    task4_data_processing >> task6_3_train_model_bronx_V >> task7_3_predict_bronx_V
-
-    task4_data_processing >> task8_1_train_model_manhatan_M >> task9_1_predict_manhatan_M
-    task4_data_processing >> task8_2_train_model_manhatan_F >> task9_2_predict_manhatan_F
-    task4_data_processing >> task8_3_train_model_manhatan_V >> task9_3_predict_manhatan_V
+    task4_data_processing >> task6_1_train_model_bronx_M >> task7_1_predict_bronx_M >>task6_2_train_model_bronx_F >> task7_2_predict_bronx_F >>task6_3_train_model_bronx_V >> task7_3_predict_bronx_V >>task8_1_train_model_manhatan_M >> task9_1_predict_manhatan_M >>task8_2_train_model_manhatan_F >> task9_2_predict_manhatan_F >>task8_3_train_model_manhatan_V >> task9_3_predict_manhatan_V
     
